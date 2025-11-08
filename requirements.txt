@@ -1,18 +1,8 @@
-# Streamlit and compatible rich version
-streamlit==1.26.0
-rich>=10.14.0,<14
-
-# Spacy and English model
-spacy==3.6.0
+streamlit>=1.25.0
+pandas>=2.1.0
+openpyxl>=3.1.0
+spacy>=3.6.0
+rapidfuzz>=2.16.0
+scispacy>=0.5.1
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0-py3-none-any.whl
-
-# Core data libraries
-pandas==2.0.3
-numpy==1.25.2
-
-# Optional: string matching, fuzzy search, spell check
-rapidfuzz==2.16.0
-symspellpy==6.7.5
-
-# Any other utilities your app may need
-openpyxl==3.1.2   # For Excel reading/writing
+en-core-sci-sm @ https://github.com/allenai/scispacy/releases/download/v0.5.1/en_core_sci_sm-0.5.1.tar.gz
