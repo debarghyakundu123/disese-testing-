@@ -1,17 +1,5 @@
-# Core libraries
-streamlit>=1.25.0
-pandas>=2.1.0
-openpyxl>=3.1.0
-spacy>=3.6.0
-rapidfuzz>=2.16.0
-
-# scispaCy library
-scispacy>=0.5.4
-
-# scispaCy models (install directly from URL)
-en-core-sci-sm @ https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
-
-# Optional: if you plan to use larger models, uncomment below
-# en-core-sci-md @ https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_md-0.5.4.tar.gz
-# en-core-sci-lg @ https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz
-# en-core-sci-scibert @ https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_scibert-0.5.4.tar.gz
+streamlit==1.39.0
+pandas
+spacy==3.7.2
+rapidfuzz
+openpyxl
