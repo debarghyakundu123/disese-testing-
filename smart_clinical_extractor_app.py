@@ -47,14 +47,14 @@ ABBR_MAP = {
 # ==============================================================
 @st.cache_resource(show_spinner=False)
 def load_nlp():
-    """Load spaCy model safely (smallest one)."""
+    """Load spaCy model safely (auto-download on first run)."""
+    import spacy
     try:
-        return spacy.load(SPACY_MODEL, disable=["parser", "tagger", "lemmatizer"])
-    except Exception as e:
-        st.warning(f"⚠️ NLP model not found, downloading... ({e})")
+        return spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])
+    except OSError:
         from spacy.cli import download
-        download(SPACY_MODEL)
-        return spacy.load(SPACY_MODEL, disable=["parser", "tagger", "lemmatizer"])
+        download("en_core_web_sm")
+        return spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])
 
 @st.cache_data(show_spinner=False)
 def load_disease_dict(path: str):
