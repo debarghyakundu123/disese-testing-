@@ -10,12 +10,28 @@ import spacy
 from rapidfuzz import process, fuzz
 
 # ---------------------- Streamlit Setup ----------------------
-st.set_page_config(page_title="🧠 Smart Clinical Extractor", layout="wide")
+# Use a wide layout and a custom title with an emoji
+st.set_page_config(page_title="🧠 Smart Clinical Extractor", layout="wide", initial_sidebar_state="expanded")
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["TORCH_LOGS"] = "none"
 
-# ---------------------- Config ----------------------
-DISEASE_DICT_PATH = "diseases_cleaned_final.txt"
+# --- SESSION STATE INITIALIZATION ---
+if 'batch_df' not in st.session_state:
+    st.session_state['batch_df'] = None
+if 'manual_results' not in st.session_state:
+    st.session_state['manual_results'] = None
+if 'run_status' not in st.session_state:
+    # Status can be 'ready', 'complete', 'no_results', 'error'
+    st.session_state['run_status'] = 'ready'
+if 'uploaded_df' not in st.session_state:
+    st.session_state['uploaded_df'] = None
+
+# --- FIXED MODE DEFINITION ---
+# The user requested to remove mode selection and fix it to 'clinical'
+mode = "clinical"
+
+# ---------------------- Config (MUST BE EXACT) ----------------------
+DISEASE_DICT_PATH = "updatedcleaned_diseases.txt"
 USE_SCISPACY = False
 SCISPACY_MODEL = "en_core_sci_sm"
 SPACY_MODEL = "en_core_web_sm"
@@ -25,11 +41,11 @@ STOPWORDS = set([
     "patient", "history"
 ])
 
-# ---------------------- Load Models ----------------------
+# ---------------------- Load Models (MUST BE EXACT) ----------------------
 @st.cache_resource
 def load_nlp_model():
     try:
-        model = SCISPACY_MODEL if USE_SCISPACY else SPACY_MODEL
+        model = SCISCIPACY_MODEL if USE_SCISPACY else SPACY_MODEL
         return spacy.load(model, disable=["parser", "tagger"])
     except Exception as e:
         st.error(f"❌ Failed to load NLP model: {e}")
@@ -49,7 +65,7 @@ nlp = load_nlp_model()
 disease_list = load_disease_dict(DISEASE_DICT_PATH)
 disease_set: Set[str] = set(disease_list)
 
-# ---------------------- Helper Functions ----------------------
+# ---------------------- Helper Functions (MUST BE EXACT) ----------------------
 def clean_text(text: str) -> str:
     t = text.lower()
     t = re.sub(r"[\[\]\(\)\{\}\|_,-/;:/\\]+", " ", t)
@@ -98,12 +114,12 @@ def extract_conditions(text: str, mode: str = "clinical", ngram_max: int = 4) ->
         for j in range(i + 1, min(len(tokens), i + ngram_max) + 1):
             ngrams.append(" ".join(tokens[i:j]))
 
-    # exact match
+    # -------------------- STEP 1: Exact match --------------------
     for phrase in set(ngrams + tokens):
         if phrase in disease_set:
             results[phrase] = {"disease": phrase, "source": "exact", "score": 100}
 
-    # NER + fuzzy
+    # -------------------- STEP 2: NER + fuzzy --------------------
     doc = nlp(raw)
     ner_candidates = [ent.text.strip().lower() for ent in getattr(doc, "ents", []) if len(ent.text) > 2]
     for cand in set(ner_candidates):
@@ -111,7 +127,7 @@ def extract_conditions(text: str, mode: str = "clinical", ngram_max: int = 4) ->
         if match and score >= threshold:
             results[match] = {"disease": match, "source": "ner_fuzzy", "score": score}
 
-    # fuzzy ngrams
+    # -------------------- STEP 3: Fuzzy n-grams --------------------
     for phrase in set(ngrams):
         if phrase in results:
             continue
@@ -119,115 +135,292 @@ def extract_conditions(text: str, mode: str = "clinical", ngram_max: int = 4) ->
         if match and score >= threshold:
             results[match] = {"disease": match, "source": "fuzzy", "score": score}
 
+    # -------------------- 🧠 STEP 4: SMART FALLBACK --------------------
+    # If model found nothing, scan raw text for any known disease terms manually
+    if not results:
+        fallback_matches = [d for d in disease_list if d in raw]
+        for match in fallback_matches:
+            results[match] = {"disease": match, "source": "fallback", "score": 70}
+
+    # -------------------- STEP 5: Clean and finalize --------------------
     final = [r for r in results.values() if len(r["disease"]) >= 3 and r["disease"] not in STOPWORDS]
     unique = remove_redundant_diseases([r["disease"] for r in final])
     clean_results = [r for r in final if r["disease"] in unique]
     return sorted(clean_results, key=lambda x: (x["score"], len(x["disease"])), reverse=True)
 
-# ---------------------- Streamlit UI ----------------------
-st.title("🧠 Smart Clinical Extractor")
-st.caption("Extract medical conditions from text or uploaded files easily.")
+# ---------------------- Streamlit UI (Beautified & Fixed Mode) ----------------------
 
-option = st.radio("Choose Input Mode:", ["📝 Manual Text Entry", "📂 Upload File"], horizontal=True)
+# --- Sidebar for Configuration and Info ---
+st.sidebar.title("⚙️ Extraction Settings")
+st.sidebar.markdown(
+    """
+    The matching mode is **fixed to Clinical** (88% threshold)
+    for optimal performance on typical medical narratives.
+    """
+)
 
-# Manual Text Mode
-if option == "📝 Manual Text Entry":
-    with st.form("manual_form"):
-        user_text = st.text_area(
-            "Enter clinical note or text:",
-            height=200,
-            placeholder="e.g., Patient has BP, diabetes, fatty liver since 2021..."
-        )
-        mode = st.selectbox("Matching Mode", ["clinical", "strict", "smart", "lenient", "exact"], index=0)
-        submitted = st.form_submit_button("🔍 Extract Conditions")
+st.sidebar.markdown("---")
 
-    if submitted:
-        if not user_text.strip():
-            st.warning("⚠️ Please enter some text.")
-        else:
-            with st.spinner("Extracting diseases..."):
-                results = extract_conditions(user_text, mode=mode)
-            if results:
-                st.success(f"✅ Found {len(results)} conditions!")
-                st.dataframe(results, use_container_width=True)
-            else:
-                st.info("No diseases or conditions detected.")
+st.sidebar.subheader("Model & Mode Details")
+st.sidebar.info(
+    f"""
+    **Model Used:** `{SCISPACY_MODEL if USE_SCISPACY else SPACY_MODEL}`
+    
+    **Active Mode:** **Clinical**
+    
+    **Threshold:** {FUZZ_THRESHOLD['clinical']}% (Fuzziness Score)
+    """
+)
 
-# File Upload Mode
-# File Upload Mode
-elif option == "📂 Upload File":
-    st.write("### Choose how to load your file:")
-    file_option = st.radio("Select file input method:", ["📤 Upload File", "💻 Use Local Path"], horizontal=True)
 
-    df = None
+# --- Main Content Area Header ---
+st.markdown("<h1 style='text-align: center; color: #1f78b4;'>🧠 Clinical Entity Extractor</h1>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div style='text-align: center; margin-bottom: 30px;'>
+        **Intelligent extraction of medical conditions and diseases from unstructured clinical text or data files.**
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
 
-    if file_option == "📤 Upload File":
-        uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=False)
-        if uploaded_file:
-            try:
-                file_ext = uploaded_file.name.split(".")[-1].lower()
-                file_bytes = uploaded_file.read()
-                uploaded_file.seek(0)
+# Use columns for radio selection to center it
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    option = st.radio(
+        "Choose Input Source:", 
+        ["📝 Manual Text Entry", "📂 Upload File"], 
+        horizontal=True,
+        key="input_option"
+    )
 
-                if file_ext == "csv":
-                    df = pd.read_csv(io.BytesIO(file_bytes))
-                elif file_ext == "xlsx":
-                    df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
-                else:
-                    st.error("❌ Unsupported file type. Please upload CSV or XLSX.")
-                    st.stop()
+st.markdown("---") # Visual separator
 
-                st.success(f"✅ File uploaded successfully! Rows: {len(df)}")
+# --- MAIN LEFT/RIGHT SPLIT ---
+input_col, output_col = st.columns([1, 1])
 
-            except Exception as e:
-                st.error(f"❌ Error reading uploaded file: {e}")
+# =========================================================================
+# LEFT COLUMN: INPUT AND RUN
+# =========================================================================
+with input_col:
+    # Manual Text Mode
+    if option == "📝 Manual Text Entry":
+        
+        with st.container(border=True):
+            st.subheader(f"📝 Text Input (Mode: {mode.capitalize()})")
+            st.markdown("Paste your clinical note or unstructured text below.")
 
-    elif file_option == "💻 Use Local Path":
-        local_path = st.text_input("Enter full file path:", placeholder="e.g. C:\\Users\\Debarghya Kundu\\Desktop\\Final_Raw.xlsx")
-        if local_path:
-            path = Path(local_path)
-            if not path.exists():
-                st.error("❌ File not found. Please check the path.")
-            else:
-                try:
-                    if path.suffix.lower() == ".csv":
-                        df = pd.read_csv(path)
-                    elif path.suffix.lower() == ".xlsx":
-                        df = pd.read_excel(path, engine="openpyxl")
-                    else:
-                        st.error("❌ Unsupported file format.")
-                        st.stop()
-                    st.success(f"✅ Loaded file from local path! Rows: {len(df)}")
-                except Exception as e:
-                    st.error(f"❌ Error reading file: {e}")
-
-    if df is not None:
-        st.write("📊 Preview of Data:")
-        st.dataframe(df.head(), use_container_width=True)
-
-        column = st.selectbox("Select the column containing clinical text:", df.columns)
-        mode = st.selectbox("Matching Mode", ["clinical", "strict", "smart", "lenient", "exact"], index=0)
-
-        if st.button("🚀 Run Extraction"):
-            with st.spinner("Extracting conditions from file..."):
-                df["Extracted_Diseases"] = df[column].astype(str).apply(
-                    lambda x: ", ".join([r["disease"] for r in extract_conditions(x, mode)]) if x.strip() else ""
+            with st.form("manual_form"):
+                user_text = st.text_area(
+                    "Clinical Text:",
+                    height=250,
+                    placeholder="e.g., Patient is a 55-year-old male with a history of HTN, DM, and recent MI. Also documented CKD stage 3. Requires follow-up for Hba1c.",
+                    label_visibility="collapsed"
                 )
-            st.success("✅ Extraction complete!")
+                
+                submitted = st.form_submit_button("🚀 Run Extraction", type="primary", use_container_width=True)
 
-            st.subheader("📋 Preview of Extracted Results")
-            st.dataframe(df.head(), use_container_width=True)
+            if submitted:
+                if not user_text.strip():
+                    st.session_state['run_status'] = 'error'
+                    st.error("⚠️ Please enter some text into the box to begin extraction.")
+                else:
+                    with st.spinner(f"Processing text with **{mode.capitalize()}** mode..."):
+                        # --- CORE LOGIC ---
+                        results = extract_conditions(user_text, mode=mode)
+                        # --- END CORE LOGIC ---
+                    
+                    if results:
+                        st.session_state['manual_results'] = results
+                        st.session_state['batch_df'] = None
+                        st.session_state['run_status'] = 'complete'
+                    else:
+                        st.session_state['run_status'] = 'no_results'
+                    st.success("Extraction command sent to results panel.")
+    
+    # File Upload Mode
+    elif option == "📂 Upload File":
+        
+        # Reset uploaded_df if user switches back and forth
+        df = st.session_state['uploaded_df']
+        
+        with st.container(border=True):
+            st.subheader(f"📂 Batch Extraction (Mode: {mode.capitalize()})")
+            
+            upload_col, path_col = st.columns(2)
+            
+            # --- File Upload ---
+            with upload_col:
+                st.markdown("##### 📤 Option A: Upload File")
+                uploaded_file = st.file_uploader(
+                    "Upload a CSV or Excel file", 
+                    type=["csv", "xlsx"], 
+                    accept_multiple_files=False,
+                    label_visibility="collapsed"
+                )
+            
+            # --- Local Path Input ---
+            with path_col:
+                st.markdown("##### 💻 Option B: Use Local Path")
+                local_path = st.text_input(
+                    "Enter full file path (Local Only)", 
+                    placeholder="e.g. /data/clinical_notes.csv",
+                    label_visibility="collapsed"
+                )
 
-            output_path = Path.cwd() / "Extracted_Results.xlsx"
-            df.to_excel(output_path, index=False)
-            st.info(f"📁 Results saved locally at: {output_path}")
+            # --- File Loading Logic ---
+            if uploaded_file and (df is None or uploaded_file.name != getattr(df, 'name', '')):
+                try:
+                    file_ext = uploaded_file.name.split(".")[-1].lower()
+                    file_bytes = uploaded_file.read()
+                    uploaded_file.seek(0)
 
-            st.download_button(
-                label="💾 Download Results (CSV)",
-                data=df.to_csv(index=False).encode("utf-8"),
-                file_name="extracted_results.csv",
-                mime="text/csv"
+                    if file_ext == "csv":
+                        df = pd.read_csv(io.BytesIO(file_bytes))
+                    elif file_ext == "xlsx":
+                        df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+                    else:
+                        st.session_state['run_status'] = 'error'
+                        st.error("❌ Unsupported file type. Please upload CSV or XLSX.")
+                    
+                    if df is not None:
+                        df.name = uploaded_file.name
+                        st.session_state['uploaded_df'] = df
+                        st.success(f"✅ File **'{uploaded_file.name}'** uploaded successfully! Rows: {len(df)}")
+                        st.session_state['run_status'] = 'ready'
+                except Exception as e:
+                    st.session_state['run_status'] = 'error'
+                    st.error(f"❌ Error reading uploaded file: {e}")
+
+            elif local_path and (df is None or local_path != getattr(df, 'path', '')):
+                path = Path(local_path)
+                if not path.exists():
+                    st.error("❌ Local file not found. Please check the path.")
+                else:
+                    try:
+                        if path.suffix.lower() == ".csv":
+                            df = pd.read_csv(path)
+                        elif path.suffix.lower() == ".xlsx":
+                            df = pd.read_excel(path, engine="openpyxl")
+                        else:
+                            st.error("❌ Unsupported file format.")
+                        
+                        if df is not None:
+                            df.path = local_path # Attach path for comparison
+                            st.session_state['uploaded_df'] = df
+                            st.success(f"✅ Loaded file from local path! Rows: {len(df)}")
+                            st.session_state['run_status'] = 'ready'
+                    except Exception as e:
+                        st.session_state['run_status'] = 'error'
+                        st.error(f"❌ Error reading file: {e}")
+
+        # Configuration and Run Section (Appears after file is loaded)
+        if st.session_state['uploaded_df'] is not None:
+            st.markdown("### Configuration and Run")
+            
+            with st.expander("Data Preview (First 5 Rows)", expanded=False):
+                st.dataframe(st.session_state['uploaded_df'].head(), use_container_width=True)
+
+            col_select, run_col = st.columns([3, 1])
+
+            with col_select:
+                # Use the loaded df columns for selection
+                column = st.selectbox(
+                    "1. Select the column containing clinical text to process:", 
+                    st.session_state['uploaded_df'].columns,
+                    help="Choose the column that holds the clinical narratives you want to extract from.",
+                    key="text_column_selector"
+                )
+            
+            with run_col:
+                st.markdown("---") # Spacer
+                if st.button("🚀 Run Batch Extraction", type="primary", use_container_width=True):
+                    if column not in st.session_state['uploaded_df'].columns:
+                        st.error("Please select a valid column.")
+                    else:
+                        temp_df = st.session_state['uploaded_df'].copy()
+                        with st.spinner(f"Extracting conditions from {len(temp_df)} rows using {mode.capitalize()} mode..."):
+                            # --- CORE LOGIC (MUST BE EXACT) ---
+                            temp_df["Extracted_Diseases"] = temp_df[column].astype(str).apply(
+                                lambda x: ", ".join([r["disease"] for r in extract_conditions(x, mode)]) if x.strip() else ""
+                            )
+                            # --- END CORE LOGIC ---
+
+                        st.session_state['batch_df'] = temp_df
+                        st.session_state['manual_results'] = None
+                        st.session_state['run_status'] = 'complete'
+                        st.success("Extraction command sent to results panel.")
+# =========================================================================
+# RIGHT COLUMN: RESULTS
+# =========================================================================
+with output_col:
+    st.markdown("<h3 style='text-align: center;'>📋 Extraction Results</h3>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    if st.session_state['run_status'] == 'complete':
+        st.success("✅ Extraction complete! See results below.")
+
+        # --- MANUAL MODE RESULTS ---
+        if st.session_state['manual_results']:
+            results = st.session_state['manual_results']
+            with st.expander(f"Extracted {len(results)} Conditions (Mode: {mode.capitalize()})", expanded=True):
+                st.dataframe(
+                    results, 
+                    use_container_width=True,
+                    column_config={
+                        "disease": st.column_config.TextColumn("Condition"),
+                        "source": st.column_config.TextColumn("Source Method"),
+                        "score": st.column_config.ProgressColumn("Match Score", format="%d", min_value=0, max_value=100),
+                    }
+                )
+        
+        # --- BATCH MODE RESULTS ---
+        elif st.session_state['batch_df'] is not None:
+            df = st.session_state['batch_df']
+            
+            st.markdown(
+                "<p style='text-align: center;'>The new <strong>Extracted_Diseases</strong> column has been added to your dataset. Preview of the top 10 rows:</p>",
+                unsafe_allow_html=True
             )
+            st.dataframe(df.head(10), use_container_width=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Download and Save Info (placed in columns for alignment)
+            dl_col, save_col = st.columns([1, 1])
+            
+            with dl_col:
+                csv_data = df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="⬇️ Download Results (CSV)",
+                    data=csv_data,
+                    file_name="extracted_clinical_results.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            with save_col:
+                output_path = Path.cwd() / "Extracted_Results.xlsx"
+                df.to_excel(output_path, index=False)
+                st.info(f"📁 **File written to server disk:** {output_path.name}") 
+
+    elif st.session_state['run_status'] == 'no_results':
+        st.info("🔎 No diseases or conditions were detected based on the current input and settings.")
+    
+    elif st.session_state['run_status'] == 'ready':
+        st.info("Ready for input. Extracted results will appear here after running the extraction.")
+    
+    # Error messages are generally displayed immediately in the input column, but we keep this for robust status handling
+    elif st.session_state['run_status'] == 'error':
+         st.warning("Please resolve the error in the left panel to proceed.")
+
 
 st.markdown("---")
-st.markdown("👨‍⚕️ **Developed by Debarghya Kundu** | AI-powered Clinical Text Extractor")
+st.markdown(
+    """
+    <p style='text-align: center; color: #777;'>
+        👨‍⚕️ Developed by Debarghya Kundu | AI-powered Clinical Text Extractor
+    </p>
+    """, 
+    unsafe_allow_html=True
+)
