@@ -1,5 +1,4 @@
-streamlit==1.39.0
+streamlit
 pandas
-spacy==3.7.2
-rapidfuzz
-openpyxl
+spacy
+scispacy
